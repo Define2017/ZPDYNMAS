@@ -1,10 +1,17 @@
 # ZPDYNMAS
 SAP HCM Dynamic Actions
 
-This is a simple report which can edit the SAP HCM dynamic actions in a better UI. You've got a better overview with the tree control on the left side. You can Rebuild the sequenz number, so now if you add new Dynamic Actions, those rows will get a sequenz number and you don't need to add it. 
+With the old maintenance view V_T588Z you can't switch fast between several infotypes, subtypes, etc. And if you maintain the table T588Z directly it can get unclear where exactly you are. 
+To change this I created a report which let you change the T588Z entries and save them into a (customizing-)transport request. To have a better overview about the infotypes, subtypes, etc. I added a tree view where you can choose which area you want to maintain. 
+Another feature which is added, is the "rebuild numbers" button. With this button, the report automatically changes the numbers in the "order" or "sequence" column. 
 
+Old SM30 View: 
 
+![alt text](/img/SM30-Dynamic-Actions-V_T588Z.png "Old SM30 View")
 
+New Report: 
+
+![alt text](/img/ZPDYNMAS.png "New Report ZPDYNMAS")
 
 ## Installation and prerequisite
 
