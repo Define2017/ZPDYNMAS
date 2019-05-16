@@ -4,6 +4,24 @@
 CLASS lcl_general_view DEFINITION DEFERRED.
 CLASS lcl_tree_view DEFINITION DEFERRED.
 
+CLASS lcx_change_db_not_successfull DEFINITION INHERITING FROM cx_static_check FINAL.
+ENDCLASS.
+
+CLASS lcx_change_db_not_successfull IMPLEMENTATION.
+ENDCLASS.
+
+CLASS lcx_write_tr_not_successfull DEFINITION INHERITING FROM cx_static_check FINAL.
+ENDCLASS.
+
+CLASS lcx_write_tr_not_successfull IMPLEMENTATION.
+ENDCLASS.
+
+CLASS lcx_delete_not_successfull DEFINITION INHERITING FROM cx_static_check FINAL.
+ENDCLASS.
+
+CLASS lcx_delete_not_successfull IMPLEMENTATION.
+ENDCLASS.
+
 CLASS lcl_dynmas DEFINITION CREATE PRIVATE.
 
   PUBLIC SECTION.
@@ -11,29 +29,35 @@ CLASS lcl_dynmas DEFINITION CREATE PRIVATE.
     TYPES: t_t588z TYPE TABLE OF t588z.
 
     CLASS-METHODS:
+      "! returns instance of lcl_dynmas
       get_instance RETURNING VALUE(r_self) TYPE REF TO lcl_dynmas.
 
 
     METHODS:
+      "! selects dynamic actions
       select_dynmas.
 
     METHODS:
+      "! returns complete T588Z
       get_whole_table RETURNING VALUE(table) TYPE z_t_t588z.
 
-*    " getter methods
     METHODS:
+      "! returns every T588Z entry for the given infotype
       get_for_infty  IMPORTING infty                   TYPE infty
                      RETURNING VALUE(rt_all_for_infty) TYPE z_t_t588z,
 
+      "! returns every T588Z entry for the given infotype and subtype
       get_for_subty  IMPORTING infty                   TYPE infty
                                subty                   TYPE subty
                      RETURNING VALUE(rt_all_for_subty) TYPE z_t_t588z,
 
+      "! returns every T588Z entry for the given infotype, subtype and the fieldname
       get_for_field  IMPORTING infty                   TYPE infty
                                subty                   TYPE subty
                                field                   TYPE fieldname
                      RETURNING VALUE(rt_all_for_field) TYPE z_t_t588z,
 
+      "! returns every T588Z entry for the given infotype, subtype, fieldname and the action
       get_for_actio IMPORTING infty                   TYPE infty
                               subty                   TYPE subty
                               field                   TYPE fieldname
@@ -41,25 +65,38 @@ CLASS lcl_dynmas DEFINITION CREATE PRIVATE.
                     RETURNING VALUE(rt_all_for_actio) TYPE z_t_t588z.
 
     METHODS:
+      "! Save changes into DB-Table T588Z and write an transport request
       save IMPORTING current_t588z TYPE z_t_t588z
                      origin_t588z  TYPE z_t_t588z.
 
   PRIVATE SECTION.
 
 
-    METHODS:
-      constructor.
+    METHODS: constructor.
 
     METHODS:
-      write_transport_request IMPORTING t588z       TYPE z_t_t588z
-                              RETURNING VALUE(task) TYPE trkorr,
+      "! write changes into transport request <br>
+      "! @Exception: If no entry got written into an TR --> exception
+      write_transport_request IMPORTING t588z                    TYPE z_t_t588z
+                              RETURNING VALUE(transport_request) TYPE REF TO zif_trs_transport_request
+                              RAISING   lcx_write_tr_not_successfull.
+
+    METHODS:
+      "! writing the changes into the database table <br>
+      "! @Exception: If there was any error while writing into the db --> Exception
       change_db_table IMPORTING origin_t588z  TYPE z_t_t588z
                                 current_t588z TYPE z_t_t588z
-                      RETURNING VALUE(rc)     LIKE sy-subrc,
-      delete_transport_entries
-        IMPORTING
-          t588z TYPE z_t_t588z
-          task  TYPE trkorr.
+                      RAISING   lcx_change_db_not_successfull.
+
+    METHODS:
+      "! Todo!
+      prepare_table_for_save IMPORTING current_shown_t588z  TYPE z_t_t588z
+                                       original_shown_t588z TYPE z_t_t588z
+                             RETURNING VALUE(result)        TYPE z_t_t588z.
+
+    METHODS:
+      "! Deletes the modified entries from table complete_t588z
+      delete_modified_entries RAISING lcx_delete_not_successfull.
 
     CLASS-DATA:
       self TYPE REF TO lcl_dynmas.
@@ -93,7 +130,7 @@ CLASS lcl_table_view DEFINITION.
 
     CLASS-METHODS: show_table IMPORTING it_t588z TYPE z_t_t588z.
 
-    CLASS-METHODS: table_changed RETURNING VALUE(changed) TYPE abap_bool.
+    CLASS-METHODS: has_table_changed RETURNING VALUE(changed) TYPE abap_bool.
     CLASS-METHODS: get_shown_table RETURNING VALUE(shown) TYPE z_t_t588z.
 
   PRIVATE SECTION.
@@ -310,18 +347,195 @@ CLASS lcl_dynmas IMPLEMENTATION.
 
   METHOD save.
 
-    DATA tmp_t588z TYPE z_t_t588z.
+    DATA(changed_shown_t588z) = me->prepare_table_for_save( current_shown_t588z  = current_t588z
+                                                            original_shown_t588z = origin_t588z ).
 
-    " initialize the transport table with the original entries
-    tmp_t588z = origin_t588z.
+    TRY.
+        me->delete_modified_entries( ).
+      CATCH lcx_delete_not_successfull.
+        RETURN.
+    ENDTRY.
 
-    " add every key which is currently not in the transport table!
-    LOOP AT current_t588z INTO DATA(s_t588z).
-      IF NOT line_exists( tmp_t588z[ infty = s_t588z-infty subty = s_t588z-subty
-                                     fname = s_t588z-fname opera = s_t588z-opera seqno = s_t588z-seqno ] ).
-        APPEND s_t588z TO tmp_t588z.
+    INSERT LINES OF current_t588z INTO complete_t588z INDEX sy-tabix.
+
+    " change DB and write transport request
+    TRY.
+        me->change_db_table( origin_t588z  = origin_t588z
+                             current_t588z = current_t588z ).
+
+        me->write_transport_request( t588z = changed_shown_t588z ).
+        COMMIT WORK.
+      CATCH: lcx_change_db_not_successfull,
+             lcx_write_tr_not_successfull.
+        MESSAGE |{ 'Something went wrong'(msg) }| TYPE 'I'.
+        ROLLBACK WORK.
+        RETURN.
+    ENDTRY.
+
+
+
+  ENDMETHOD.
+
+  METHOD write_transport_request.
+
+    DATA:
+      lt_e071  TYPE TABLE OF e071,
+      lt_e071k TYPE TABLE OF e071k,
+      ls_e071k TYPE e071k,
+      tr_order TYPE trkorr,
+      tr_task  TYPE trkorr.
+
+    " Version 1.0
+    CALL FUNCTION 'TRINT_ORDER_CHOICE'
+      EXPORTING
+        wi_order_type = 'W'
+        wi_task_type  = 'Q'
+        wi_category   = 'CUST'
+      IMPORTING
+        we_order      = tr_order
+        we_task       = tr_task
+      TABLES
+        wt_e071       = lt_e071
+        wt_e071k      = lt_e071k
+      EXCEPTIONS
+        OTHERS        = 6.
+
+    IF sy-subrc = 0.
+
+      DATA(ls_e071) = VALUE e071( as4pos = 0
+                                  pgmid = 'R3TR'
+                                  object = 'TABU'
+                                  obj_name = 'T588Z'
+                                  objfunc = 'K' ).
+      APPEND ls_e071 TO lt_e071.
+
+      LOOP AT t588z INTO DATA(s_t588z).
+
+        CONCATENATE sy-mandt s_t588z-infty s_t588z-subty s_t588z-fname
+                s_t588z-opera s_t588z-seqno INTO ls_e071k-tabkey.
+
+        ls_e071k-pgmid = 'R3TR'.
+        ls_e071k-as4pos = 0.
+        ls_e071k-object = ls_e071k-mastertype = 'TABU'.
+        ls_e071k-objname = ls_e071k-mastername = 'T588Z'.
+
+        APPEND ls_e071k TO lt_e071k.
+        CLEAR ls_e071k.
+
+      ENDLOOP.
+
+      IF lines( lt_e071k ) > 0 AND lines( lt_e071 ) > 0.
+        CALL FUNCTION 'TR_APPEND_TO_COMM_OBJS_KEYS'
+          EXPORTING
+            wi_trkorr = tr_task
+          TABLES
+            wt_e071   = lt_e071
+            wt_e071k  = lt_e071k
+          EXCEPTIONS
+            OTHERS    = 68.
+        IF sy-subrc = 0.
+          MESSAGE s000(vz) WITH |{ 'Entries are in Transport Request '(001) } { tr_order }|.
+        ELSE.
+          RAISE RESUMABLE EXCEPTION TYPE lcx_write_tr_not_successfull.
+        ENDIF.
+
+      ENDIF.
+
+    ENDIF.
+
+  ENDMETHOD.
+
+
+  METHOD change_db_table.
+
+    DATA: vinfo      TYPE vargt,
+          kennz      TYPE kenna,
+          t588z_line TYPE t588z,
+          highest_rc LIKE sy-subrc VALUE 0.
+
+
+    LOOP AT origin_t588z INTO DATA(origin).
+
+      CLEAR: t588z_line, kennz, vinfo.
+
+      " check if the line does still exist --> modify KENNZ and VINFO in database
+      IF line_exists( current_t588z[ infty = origin-infty subty = origin-subty fname = origin-fname
+                                     opera = origin-opera seqno = origin-seqno ] ).
+
+        t588z_line = current_t588z[ infty = origin-infty subty = origin-subty fname = origin-fname
+                                     opera = origin-opera seqno = origin-seqno ].
+
+        kennz = t588z_line-kennz.
+        vinfo = t588z_line-vinfo.
+
+        " if both lines are equal the update won't be performed and sy-subrc would be 4 --> exception
+        IF origin = t588z_line.
+          CONTINUE.
+        ENDIF.
+
+        UPDATE t588z SET kennz = kennz vinfo = vinfo
+                   WHERE infty = t588z_line-infty
+                     AND subty = t588z_line-subty
+                     AND fname = t588z_line-fname
+                     AND opera = t588z_line-opera
+                     AND seqno = t588z_line.
+
+        IF sy-subrc = 4.
+          RAISE RESUMABLE EXCEPTION TYPE lcx_change_db_not_successfull.
+        ENDIF.
+
+      ELSE.
+        " delete every entry which is currently not in the table
+        DELETE FROM t588z WHERE infty = origin-infty AND subty = origin-subty
+                            AND fname = origin-fname AND opera = origin-opera AND seqno = origin-seqno.
+        IF sy-subrc <> 0.
+          RAISE RESUMABLE EXCEPTION TYPE lcx_change_db_not_successfull.
+        ENDIF.
+      ENDIF.
+
+    ENDLOOP.
+
+    CLEAR: origin, t588z_line, kennz, vinfo.
+
+    " every line which was not in the origin table should get inserted into t588z
+    LOOP AT current_t588z INTO DATA(current).
+
+      " check if line existed in the origin table
+      IF line_exists( origin_t588z[ infty = current-infty subty = current-subty fname = current-fname
+                                    opera = current-opera seqno = current-seqno ] ).
+        "if yes continue with next entry ( we already processed it )
+        CONTINUE.
+      ELSE.
+        " if not insert it into t588z
+        INSERT INTO t588z VALUES @current.
+        IF sy-subrc <> 0.
+          RAISE RESUMABLE EXCEPTION TYPE lcx_change_db_not_successfull.
+        ENDIF.
+      ENDIF.
+
+    ENDLOOP.
+
+  ENDMETHOD.
+
+  METHOD prepare_table_for_save.
+
+    result = original_shown_t588z.
+
+    LOOP AT current_shown_t588z INTO DATA(shown_t588z).
+
+      IF NOT line_exists( original_shown_t588z[ infty = shown_t588z-infty
+                                                subty = shown_t588z-subty
+                                                fname = shown_t588z-fname
+                                                opera = shown_t588z-opera
+                                                seqno = shown_t588z-seqno ] ).
+        INSERT shown_t588z INTO TABLE result.
       ENDIF.
     ENDLOOP.
+
+  ENDMETHOD.
+
+
+  METHOD delete_modified_entries.
 
     DATA(current_focus) = lcl_general_view=>get_instance( )->get_focus( ).
 
@@ -352,188 +566,8 @@ CLASS lcl_dynmas IMPLEMENTATION.
                                 AND fname = current_focus-fname AND opera = current_focus-opera.
     ENDCASE.
 
-    CHECK sy-subrc EQ 0.
-
-    INSERT LINES OF current_t588z INTO complete_t588z INDEX sy-tabix.
-
-    DATA(task) = me->write_transport_request( t588z = tmp_t588z ). " if everything went fine here --> commit work or rollback
-
-    " commit or rollback
-    IF me->change_db_table( origin_t588z = origin_t588z current_t588z = current_t588z  ) = 0.
-      COMMIT WORK AND WAIT.
-    ELSE.
-      me->delete_transport_entries( t588z = tmp_t588z task = task ).
-      ROLLBACK WORK.
-    ENDIF.
-
-
-  ENDMETHOD.
-
-  METHOD write_transport_request.
-
-    DATA: e071  TYPE TABLE OF e071,
-          e071k TYPE TABLE OF e071k.
-
-    BREAK-POINT.
-
-    " this method is not ready yet.
-    CHECK 1 = 2.
-
-    CALL FUNCTION 'TRINT_ORDER_CHOICE'
-      EXPORTING
-        wi_order_type = 'W'
-        wi_task_type  = 'Q'
-        wi_category   = 'CUST'
-      IMPORTING
-*       WE_ORDER      =
-        we_task       = task
-      TABLES
-        wt_e071       = e071
-        wt_e071k      = e071k
-      EXCEPTIONS
-        OTHERS        = 6.
-    .
-
-    CHECK sy-subrc = 0.
-
-    DATA s_e071 TYPE e071.
-
-    s_e071-trkorr = space.
-    s_e071-as4pos = 0.
-    s_e071-pgmid = 'R3TR'.
-    s_e071-object = 'TABU'.
-    s_e071-obj_name = 'T588Z'.
-    s_e071-objfunc = 'K'.
-    APPEND s_e071 TO e071.
-
-    DATA s_e071k TYPE e071k.
-    s_e071k-trkorr = s_e071k-viewname = s_e071k-objfunc = space.
-    s_e071k-pgmid = 'R3TR'.
-    s_e071k-object = s_e071k-mastertype = 'TABU'.
-    s_e071k-objname = s_e071k-mastername = 'T588Z'.
-    s_e071k-as4pos = 0.
-
-    LOOP AT t588z INTO DATA(s_t588z).
-
-      CONCATENATE sy-mandt s_t588z-infty s_t588z-subty s_t588z-fname
-                  s_t588z-opera s_t588z-seqno INTO s_e071k-tabkey.
-
-      APPEND s_e071k TO e071k.
-      CLEAR s_e071k-tabkey.
-    ENDLOOP.
-
-    CALL FUNCTION 'TR_APPEND_TO_COMM_OBJS_KEYS'
-      EXPORTING
-        wi_trkorr = task    " Aufgabe, an den angehängt werden soll
-      TABLES
-        wt_e071   = e071    " Tabelle anzuhängender Objekte
-        wt_e071k  = e071k.    " Tabelle anzuhängender Keys
-
     IF sy-subrc <> 0.
-      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
-                 WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
-    ENDIF.
-
-
-
-  ENDMETHOD.
-
-
-  METHOD change_db_table.
-
-    DATA: vinfo      TYPE vargt,
-          kennz      TYPE kenna,
-          t588z_line TYPE t588z,
-          highest_rc LIKE sy-subrc VALUE 0.
-
-
-    LOOP AT origin_t588z INTO DATA(origin).
-
-      CLEAR: t588z_line, kennz, vinfo.
-
-      " check if the line does still exist --> modify KENNZ and VINFO in database
-      IF line_exists( current_t588z[ infty = origin-infty subty = origin-subty fname = origin-fname
-                                     opera = origin-opera seqno = origin-seqno ] ).
-
-        t588z_line = current_t588z[ infty = origin-infty subty = origin-subty fname = origin-fname
-                                     opera = origin-opera seqno = origin-seqno ].
-
-        kennz = t588z_line-kennz.
-        vinfo = t588z_line-vinfo.
-
-        UPDATE t588z SET kennz = kennz vinfo = vinfo
-                   WHERE infty = t588z_line-infty
-                     AND subty = t588z_line-subty
-                     AND fname = t588z_line-fname
-                     AND opera = t588z_line-opera
-                     AND seqno = t588z_line.
-
-        IF sy-subrc <> 0.
-          highest_rc = 4.
-          EXIT.
-        ENDIF.
-
-      ELSE.
-        " delete every entry which is currently not in the table
-        DELETE FROM t588z WHERE infty = origin-infty AND subty = origin-subty
-                            AND fname = origin-fname AND opera = origin-opera AND seqno = origin-seqno.
-        IF sy-subrc <> 0.
-          highest_rc = 4.
-          EXIT.
-        ENDIF.
-      ENDIF.
-
-    ENDLOOP.
-
-    CLEAR: origin, t588z_line, kennz, vinfo.
-
-    " every line which was not in the origin table should get inserted into t588z
-    LOOP AT current_t588z INTO DATA(current).
-
-      " check if line existed in the origin table
-      IF line_exists( origin_t588z[ infty = current-infty subty = current-subty fname = current-fname
-                                    opera = current-opera seqno = current-seqno ] ).
-        "if yes continue with next entry ( we already processed it )
-        CONTINUE.
-      ELSE.
-        " if not insert it into t588z
-        INSERT INTO t588z VALUES @current.
-        IF sy-subrc = 4.
-          highest_rc = 4.
-          EXIT.
-        ENDIF.
-      ENDIF.
-
-    ENDLOOP.
-
-    rc = highest_rc.
-
-  ENDMETHOD.
-
-
-  METHOD delete_transport_entries.
-
-    DATA: s_e071 TYPE e071.
-
-    DATA tmp LIKE task.
-
-    s_e071-trkorr = space.
-    s_e071-as4pos = 0.
-    s_e071-pgmid = 'R3TR'.
-    s_e071-object = 'TABU'.
-    s_e071-obj_name = 'T588Z'.
-    s_e071-objfunc = 'K'.
-    s_e071-trkorr = task.
-
-    CALL FUNCTION 'TR_DELETE_COMM_OBJECT_KEYS'
-      EXPORTING
-        is_e071_delete = s_e071    " E071-Struktur mit dem zu löschenden Objekt
-      CHANGING
-        cs_request     = tmp.
-
-    IF sy-subrc <> 0.
-      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
-                 WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+      RAISE RESUMABLE EXCEPTION TYPE lcx_delete_not_successfull.
     ENDIF.
 
   ENDMETHOD.
@@ -548,10 +582,11 @@ CLASS lcl_table_view IMPLEMENTATION.
     origin_shown_table = it_t588z.
   ENDMETHOD.
 
-  METHOD table_changed.
-    changed = abap_true.
-    CHECK t588z_itab EQ origin_shown_table.
-    changed = abap_false.
+  METHOD has_table_changed.
+
+    changed = COND abap_bool( WHEN t588z_itab EQ origin_shown_table THEN abap_false
+                              ELSE abap_true ).
+
   ENDMETHOD.
 
   METHOD get_shown_table.
@@ -669,7 +704,7 @@ CLASS lcl_tree_view IMPLEMENTATION.
       lcl_tree_view=>tree_container = NEW cl_gui_custom_container(
          container_name              = 'LCL_TREE_VIEW=>TREE_CONTAINER' ).
 
-      hierarchy_header-heading = 'Vorhandene Einträge'.
+      hierarchy_header-heading = 'Gefundene Einträge'(ent).
 
       tree_grid = NEW cl_gui_column_tree( parent                = lcl_tree_view=>tree_container
                                           node_selection_mode   = cl_gui_column_tree=>node_sel_mode_single
@@ -826,7 +861,7 @@ CLASS lcl_tree_view IMPLEMENTATION.
 
     APPEND node TO node_table.
 
-    txt = 'Feld' && ` ` && t588z_line-fname.
+    txt = 'Feld'(002) && ` ` && t588z_line-fname.
     me->add_item( node_key = node-node_key txt = txt ).
     me->add_key( t588z_line = t588z_line
                  node_key = node-node_key
@@ -850,13 +885,13 @@ CLASS lcl_tree_view IMPLEMENTATION.
     APPEND node TO node_table.
 
     txt = SWITCH string( t588z_line-opera
-                          WHEN '00' THEN '00 (generell)'
-                          WHEN '02' THEN '02 (ändern)'
-                          WHEN '04' THEN '04 (anlegen)'
-                          WHEN '06' THEN '06 (anlegen/ändern)'
-                          WHEN '08' THEN '08 (löschen)'
-                          WHEN '10' THEN '10 (ändern/löschen)'
-                          WHEN '12' THEN '12 (anlegen/löschen)'  ).
+                          WHEN '00' THEN '00 (generell)'(v00)
+                          WHEN '02' THEN '02 (ändern)'(v02)
+                          WHEN '04' THEN '04 (anlegen)'(v04)
+                          WHEN '06' THEN '06 (anlegen/ändern)'(v06)
+                          WHEN '08' THEN '08 (löschen)'(v08)
+                          WHEN '10' THEN '10 (ändern/löschen)'(v10)
+                          WHEN '12' THEN '12 (anlegen/löschen)'(v12)  ).
 
     me->add_item( node_key = node-node_key txt = txt ).
     me->add_key( t588z_line = t588z_line
@@ -920,7 +955,7 @@ CLASS lcl_general_view IMPLEMENTATION.
 
     CHECK me->get_active_read_mode( ) EQ abap_false.
 
-    CHECK lcl_table_view=>table_changed( ).
+    CHECK lcl_table_view=>has_table_changed( ).
 
     lcl_dynmas=>get_instance( )->save( current_t588z = lcl_table_view=>get_shown_table( )
                                        origin_t588z = table_view->get_origin_table( ) ).

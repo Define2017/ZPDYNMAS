@@ -4,11 +4,9 @@
   <asx:values>
    <PROGDIR>
     <NAME>ZPDYNMAS_NEW_TC</NAME>
-    <STATE>A</STATE>
-    <VARCL>X</VARCL>
     <SUBC>I</SUBC>
     <APPL>S</APPL>
-    <RLOAD>D</RLOAD>
+    <RLOAD>E</RLOAD>
    </PROGDIR>
    <TPOOL>
     <item>
@@ -17,6 +15,18 @@
      <LENGTH>38</LENGTH>
     </item>
    </TPOOL>
+   <I18N_TPOOL>
+    <item>
+     <LANGUAGE>E</LANGUAGE>
+     <TEXTPOOL>
+      <item>
+       <ID>R</ID>
+       <ENTRY>INCLUDE fuer TABLECONTROL-Daten (gen.)</ENTRY>
+       <LENGTH>38</LENGTH>
+      </item>
+     </TEXTPOOL>
+    </item>
+   </I18N_TPOOL>
   </asx:values>
  </asx:abap>
 </abapGit>
