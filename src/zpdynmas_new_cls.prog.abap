@@ -89,7 +89,7 @@ CLASS lcl_dynmas DEFINITION CREATE PRIVATE.
                       RAISING   lcx_change_db_not_successfull.
 
     METHODS:
-      "! Todo!
+      "! Adds shown lines into saving table.
       prepare_table_for_save IMPORTING current_shown_t588z  TYPE z_t_t588z
                                        original_shown_t588z TYPE z_t_t588z
                              RETURNING VALUE(result)        TYPE z_t_t588z.
@@ -148,7 +148,7 @@ CLASS lcl_tree_view DEFINITION.
   PUBLIC SECTION.
 
     TYPES:
-* Type für Knotenschlüssel
+      " Type for nodes
       BEGIN OF t_keytab,
         node_key TYPE num10,
         ntype    TYPE char01, " I=INFTY, S=SUBTY, F=FNAME, O=OPERA
@@ -172,12 +172,10 @@ CLASS lcl_tree_view DEFINITION.
       get_items RETURNING VALUE(r_item_table) TYPE iwb_mtreeitm.
 
     METHODS:
-      handle_node_double_click FOR EVENT node_double_click
-                    OF cl_gui_column_tree
+      handle_node_double_click FOR EVENT node_double_click OF cl_gui_column_tree
         IMPORTING node_key,
 
-      handle_item_double_click FOR EVENT item_double_click
-                    OF cl_gui_column_tree
+      handle_item_double_click FOR EVENT item_double_click OF cl_gui_column_tree
         IMPORTING node_key item_name.
 
   PRIVATE SECTION.
@@ -195,7 +193,7 @@ CLASS lcl_tree_view DEFINITION.
 
     DATA:
       item_table TYPE iwb_mtreeitm,
-      keytab     TYPE TABLE OF t_keytab. " Verzeichnis Knotenschlüssel
+      keytab     TYPE TABLE OF t_keytab.
 
 
     METHODS:
@@ -508,6 +506,7 @@ CLASS lcl_dynmas IMPLEMENTATION.
       ELSE.
         " if not insert it into t588z
         INSERT INTO t588z VALUES @current.
+
         IF sy-subrc <> 0.
           RAISE RESUMABLE EXCEPTION TYPE lcx_change_db_not_successfull.
         ENDIF.
@@ -600,7 +599,9 @@ CLASS lcl_table_view IMPLEMENTATION.
   METHOD insert.
 
     READ TABLE t588z_itab INTO t588z_wa WITH KEY flag = 'X'.
-    CHECK sy-subrc = 0.
+    IF sy-subrc <> 0.
+      RETURN.
+    ENDIF.
 
     CLEAR: t588z_wa-seqno, t588z_wa-kennz, t588z_wa-vinfo.
 
@@ -629,6 +630,7 @@ CLASS lcl_table_view IMPLEMENTATION.
 
     DATA: l_t588z LIKE t588z_wa.
 
+    " maybe there is a way to exclude the lines which are only a comment
     LOOP AT t588z_itab INTO t588z_wa.
       IF l_t588z-subty <> t588z_wa-subty OR
          l_t588z-fname <> t588z_wa-fname OR
@@ -702,7 +704,7 @@ CLASS lcl_tree_view IMPLEMENTATION.
     IF lcl_tree_view=>tree_container IS INITIAL.
 
       lcl_tree_view=>tree_container = NEW cl_gui_custom_container(
-         container_name              = 'LCL_TREE_VIEW=>TREE_CONTAINER' ).
+         container_name = 'LCL_TREE_VIEW=>TREE_CONTAINER' ).
 
       hierarchy_header-heading = 'Gefundene Einträge'(ent).
 
@@ -712,13 +714,13 @@ CLASS lcl_tree_view IMPLEMENTATION.
                                           hierarchy_column_name = 'Col1'
                                           hierarchy_header      = hierarchy_header ).
 
-*   Doppelklick auf Knoten
+      " Double click on node
       CLEAR event_table[].
       event-eventid    = tree_grid->eventid_node_double_click.
       event-appl_event = 'X'. " process PAI if event occurs
       APPEND event TO event_table.
 
-*   Doppelklick auf Item
+      " double click on item
       event-eventid    = tree_grid->eventid_item_double_click.
       event-appl_event = 'X'. " process PAI if event occurs
       APPEND event TO event_table.
@@ -728,13 +730,10 @@ CLASS lcl_tree_view IMPLEMENTATION.
       SET HANDLER me->handle_node_double_click FOR tree_grid.
       SET HANDLER me->handle_item_double_click FOR tree_grid.
 
-*   Tree aufbauen
-      CALL METHOD tree_grid->add_nodes_and_items
-        EXPORTING
-          node_table                = node_table
-          item_table                = item_table
-          item_table_structure_name = 'MTREEITM'.
-
+      " build tree
+      tree_grid->add_nodes_and_items( node_table = node_table
+                                      item_table = item_table
+                                      item_table_structure_name = 'MTREEITM' ).
 
     ENDIF.
 
@@ -782,7 +781,7 @@ CLASS lcl_tree_view IMPLEMENTATION.
 
   METHOD add_node.
 
-    ADD 1 TO node_counter.
+    node_counter = node_counter + 1.
 
     CASE node_type.
       WHEN 'I'.
@@ -794,7 +793,7 @@ CLASS lcl_tree_view IMPLEMENTATION.
       WHEN 'O'.
         me->add_node_as_funct( t588z_line ).
       WHEN OTHERS.
-        SUBTRACT 1 FROM node_counter.
+        node_counter = node_counter - 1.
     ENDCASE.
 
   ENDMETHOD.
@@ -891,7 +890,7 @@ CLASS lcl_tree_view IMPLEMENTATION.
                           WHEN '06' THEN '06 (anlegen/ändern)'(v06)
                           WHEN '08' THEN '08 (löschen)'(v08)
                           WHEN '10' THEN '10 (ändern/löschen)'(v10)
-                          WHEN '12' THEN '12 (anlegen/löschen)'(v12)  ).
+                          WHEN '12' THEN '12 (anlegen/löschen)'(v12) ).
 
     me->add_item( node_key = node-node_key txt = txt ).
     me->add_key( t588z_line = t588z_line
@@ -902,11 +901,11 @@ CLASS lcl_tree_view IMPLEMENTATION.
 
   METHOD add_item.
 
-* Item zum Tree hinzufügen
+    " Add Item to Tree
     DATA item TYPE mtreeitm.
     item-node_key = node_key.
     item-item_name = 'Col1'.
-    item-class = cl_gui_column_tree=>item_class_text. " Text Item
+    item-class = cl_gui_column_tree=>item_class_text.
     item-text = txt.
     APPEND item TO item_table.
 
@@ -914,10 +913,9 @@ CLASS lcl_tree_view IMPLEMENTATION.
 
   METHOD add_key.
 
-    DATA keywa TYPE t_keytab.
+    DATA(keywa) = VALUE t_keytab( node_key = node_key
+                                  ntype = ntype ).
 
-    keywa-node_key = node_key.
-    keywa-ntype = ntype.
     MOVE-CORRESPONDING t588z_line TO keywa.
 
     APPEND keywa TO keytab.
@@ -953,14 +951,18 @@ CLASS lcl_general_view IMPLEMENTATION.
 
   METHOD save_changes.
 
-    CHECK me->get_active_read_mode( ) EQ abap_false.
+    IF me->get_active_read_mode( ) EQ abap_true.
+      RETURN.
+    ENDIF.
 
-    CHECK lcl_table_view=>has_table_changed( ).
+    IF lcl_table_view=>has_table_changed( ).
 
-    lcl_dynmas=>get_instance( )->save( current_t588z = lcl_table_view=>get_shown_table( )
-                                       origin_t588z = table_view->get_origin_table( ) ).
+      lcl_dynmas=>get_instance( )->save( current_t588z = lcl_table_view=>get_shown_table( )
+                                         origin_t588z = table_view->get_origin_table( ) ).
 
-    me->change_mode( ).
+      me->change_mode( ).
+
+    ENDIF.
 
   ENDMETHOD.
 
@@ -988,6 +990,7 @@ CLASS lcl_general_view IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD change_mode.
+
     " if one of the parameters is supplied!
     IF read_mode IS SUPPLIED.
       active_read_mode = read_mode.
@@ -1005,7 +1008,8 @@ CLASS lcl_general_view IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD get_active_read_mode.
-    r_active_read_mode = active_read_mode. " if active_read_mode eq abap_false --> write_mode eq true
+    " if active_read_mode eq abap_false --> write_mode eq true
+    r_active_read_mode = active_read_mode.
   ENDMETHOD.
 
   METHOD insert.
